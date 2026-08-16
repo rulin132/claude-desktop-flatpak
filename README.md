@@ -153,6 +153,17 @@ flatpak install claude-desktop.flatpak
 
 No need for them to build it themselves!
 
+For publishing proper releases — GitHub Releases, a hosted Flatpak remote with
+working `flatpak update`, and what it would take to reach Flathub and Bazaar —
+see [DISTRIBUTION.md](DISTRIBUTION.md). The release process itself is in
+[RELEASING.md](RELEASING.md).
+
+> **Note:** Anthropic has shipped an [official Claude Desktop for Linux](https://code.claude.com/docs/en/desktop-linux)
+> (`.deb`, Ubuntu 22.04+/Debian 12+) since June 2026. This package remains
+> useful for distributions it does not cover — Fedora, Arch, openSUSE and
+> immutable systems — but if you are on Debian or Ubuntu, prefer the official
+> package.
+
 ## Contributing
 
 Feel free to modify the manifest to suit your needs. Common modifications:

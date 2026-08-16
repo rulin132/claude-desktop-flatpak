@@ -1,0 +1,34 @@
+name: Validate metadata
+
+# Software centres refuse to display an app whose AppStream metadata or
+# desktop entry is malformed, so validate them on every change.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils python3-yaml
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --explain com.anthropic.Claude.metainfo.xml
+
+      - name: Validate desktop entry
+        run: desktop-file-validate com.anthropic.Claude.desktop
+
+      - name: Parse Flatpak manifest
+        run: python3 -c "import yaml, sys; yaml.safe_load(open('com.anthropic.Claude.yml'))"
+
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh simple-build.sh
