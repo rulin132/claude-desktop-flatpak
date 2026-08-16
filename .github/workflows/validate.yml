@@ -19,8 +19,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils python3-yaml
 
+      # --no-net: by default appstreamcli fetches every <url> in the metainfo
+      # and warns on any non-200. claude.ai and support.claude.com return 403
+      # to CI runners, which fails validation on URLs that are correct. Check
+      # links by hand instead of gating CI on someone else's bot protection.
       - name: Validate AppStream metainfo
-        run: appstreamcli validate --explain com.anthropic.Claude.metainfo.xml
+        run: appstreamcli validate --no-net --explain com.anthropic.Claude.metainfo.xml
 
       - name: Validate desktop entry
         run: desktop-file-validate com.anthropic.Claude.desktop

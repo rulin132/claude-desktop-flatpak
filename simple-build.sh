@@ -37,8 +37,9 @@ ELECTRON_FILE="electron-v${ELECTRON_VERSION}-linux-x64.zip"
 if [ ! -f "$ELECTRON_FILE" ]; then
     echo ""
     echo "⬇️  Downloading Electron ${ELECTRON_VERSION}..."
-    wget -q --show-progress "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${ELECTRON_FILE}"
-    if [ $? -ne 0 ]; then
+    # Checked directly rather than via $?: `set -e` aborts the script the
+    # moment wget fails, so a separate exit-code test never runs.
+    if ! wget -q --show-progress "https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${ELECTRON_FILE}"; then
         echo "❌ Failed to download Electron"
         exit 1
     fi
