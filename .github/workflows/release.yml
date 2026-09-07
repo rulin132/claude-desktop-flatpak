@@ -1,0 +1,94 @@
+name: Release
+
+# Publishing is tag-driven: push a "v1.2.3" tag and this creates the matching
+# GitHub Release as a draft, with notes taken from CHANGELOG.md.
+#
+# The .flatpak bundle is attached by hand because the build is not yet
+# reproducible from a clean checkout — the manifest reads the Claude
+# application files from a path outside this repository. See RELEASING.md
+# ("Prerequisite: a reproducible build") for what has to change before the
+# build can run here.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to prepare a release for (e.g. 1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION"
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      # --no-net for the same reason as validate.yml: upstream URLs return 403
+      # to CI runners and would fail an otherwise valid release.
+      - name: Validate metadata
+        run: |
+          appstreamcli validate --no-net --explain com.anthropic.Claude.metainfo.xml
+          desktop-file-validate com.anthropic.Claude.desktop
+
+      - name: Check version consistency
+        run: ./scripts/check-version.sh "${{ steps.version.outputs.version }}"
+
+      - name: Extract release notes
+        run: |
+          ./scripts/extract-release-notes.sh "${{ steps.version.outputs.version }}" > release-notes.md
+          cat >> release-notes.md <<'EOF'
+
+          ---
+
+          ## Install
+
+          Download the bundle below and install it:
+
+          ```bash
+          flatpak install --user claude-desktop.flatpak
+          flatpak run com.anthropic.Claude
+          ```
+
+          This is a community package and is not affiliated with or endorsed by
+          Anthropic. Anthropic ships an official Claude Desktop for Linux; see
+          https://code.claude.com/docs/en/desktop-linux.
+          EOF
+          cat release-notes.md
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists, updating notes."
+            gh release edit "v$VERSION" --notes-file release-notes.md
+          else
+            gh release create "v$VERSION" \
+              --draft \
+              --title "v$VERSION" \
+              --notes-file release-notes.md
+          fi
+          echo "Draft release ready. Attach the built .flatpak bundle, then publish:"
+          echo "  gh release upload v$VERSION claude-desktop.flatpak"
+          echo "  gh release edit v$VERSION --draft=false"

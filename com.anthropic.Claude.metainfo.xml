@@ -21,12 +21,46 @@
   <launchable type="desktop-id">com.anthropic.Claude.desktop</launchable>
   <url type="homepage">https://claude.ai</url>
   <url type="help">https://support.claude.com</url>
-  <developer_name>Anthropic</developer_name>
+  <url type="bugtracker">https://github.com/rulin132/claude-desktop-flatpak/issues</url>
+  <url type="vcs-browser">https://github.com/rulin132/claude-desktop-flatpak</url>
+  <developer id="com.anthropic">
+    <name>Anthropic</name>
+  </developer>
   <content_rating type="oars-1.1"/>
+
+  <!--
+    Screenshots are required before this can be submitted to any software
+    centre (Flathub, and therefore Bazaar). See DISTRIBUTION.md.
+
+    <screenshots>
+      <screenshot type="default">
+        <image>https://.../claude-main-window.png</image>
+        <caption>Chatting with Claude</caption>
+      </screenshot>
+    </screenshots>
+  -->
+
+  <!--
+    Versions here are *packaging* versions and must match the git tag and the
+    CHANGELOG.md heading. The packaged Claude Desktop version is named in each
+    release description. scripts/check-version.sh enforces this.
+  -->
   <releases>
-    <release version="0.14.10" date="2024-11-01">
+    <release version="1.1.0" date="2024-11-02">
+      <url>https://github.com/rulin132/claude-desktop-flatpak/releases/tag/v1.1.0</url>
       <description>
-        <p>Latest release of Claude Desktop</p>
+        <p>Packaging release for Claude Desktop 0.14.10.</p>
+        <ul>
+          <li>Native window decorations and window dragging on Wayland</li>
+          <li>Bundled Electron 32.2.0 so the package is self-contained</li>
+          <li>Fixed SUID sandbox configuration errors</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.0" date="2024-11-02">
+      <url>https://github.com/rulin132/claude-desktop-flatpak/releases/tag/v1.0.0</url>
+      <description>
+        <p>First Flatpak package for Claude Desktop 0.14.10.</p>
       </description>
     </release>
   </releases>

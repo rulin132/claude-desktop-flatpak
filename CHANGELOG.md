@@ -59,13 +59,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `RELEASING.md` documenting the release process and version scheme
+- `DISTRIBUTION.md` covering GitHub Releases, hosted Flatpak remotes, and the
+  requirements for Flathub and Bazaar
+- `scripts/check-version.sh` to verify the tag, changelog and metainfo agree
+- `scripts/extract-release-notes.sh` to generate release notes from this file
+- CI workflow validating the AppStream metainfo, desktop entry and manifest
+- Tag-driven release workflow that opens a draft GitHub Release
+- `.flatpakrepo` template for hosting a Flatpak remote
+
+### Changed
+- Metainfo release entries now track packaging versions and match the changelog
+- Metainfo uses the current AppStream `<developer>` element and gains
+  bugtracker and VCS URLs
+
 ### Planned
-- Automated CI/CD for releases
-- Pre-built flatpak bundles in GitHub releases
-- Flathub submission
-- Version update automation
-- Better error handling and user feedback
-- Offline mode improvements
+- Reproducible build from Anthropic's official Linux `.deb` (blocks CI builds)
+- Screenshots in the AppStream metadata (required by software centres)
+- Hosted Flatpak remote for `flatpak update` support
+- Version update automation via flatpak-external-data-checker
 
 ---
 

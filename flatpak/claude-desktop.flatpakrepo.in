@@ -1,0 +1,10 @@
+[Flatpak Repo]
+Title=Claude Desktop (community)
+Url=https://rulin132.github.io/claude-desktop-flatpak/repo/
+Homepage=https://github.com/rulin132/claude-desktop-flatpak
+Comment=Community Flatpak builds of Claude Desktop
+Description=Unofficial Flatpak packaging of Claude Desktop. Not affiliated with or endorsed by Anthropic.
+Icon=https://rulin132.github.io/claude-desktop-flatpak/icon.png
+# Replace with the base64 of your public key, on a single line:
+#   gpg --export <KEY_ID> | base64 -w0
+GPGKey=@GPG_KEY_BASE64@
