@@ -1,94 +1,326 @@
-name: Release
+name: release
 
-# Publishing is tag-driven: push a "v1.2.3" tag and this creates the matching
-# GitHub Release as a draft, with notes taken from CHANGELOG.md.
-#
-# The .flatpak bundle is attached by hand because the build is not yet
-# reproducible from a clean checkout — the manifest reads the Claude
-# application files from a path outside this repository. See RELEASING.md
-# ("Prerequisite: a reproducible build") for what has to change before the
-# build can run here.
+# Tags stay for human-cut releases. The manifest path trigger is what makes the
+# pipeline reach users: the nightly re-pin lands as a manifest change on main,
+# and publishing on that change (gated by the AUTO_UPDATE kill switch) is how a
+# new upstream version reaches the remote without a human cutting a tag.
 on:
   push:
-    tags:
-      - "v*"
+    tags: ['v*']
+    branches: [main]
+    paths:
+      - 'io.github.rulin132.ClaudeDesktop.yaml'
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to prepare a release for (e.g. 1.2.0)"
-        required: true
 
 permissions:
   contents: write
+  packages: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  build:
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'workflow_dispatch' ||
+      vars.AUTO_UPDATE == 'on'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08@sha256:6f3180c6765cb55e5dcd8ee4127b82aba25163c8c655a161422b7c447c14e4af
+      options: --privileged
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Unsigned here. Signing happens once, in publish, so the key touches one
+      # job rather than every matrix leg.
+      - name: build
+        run: |
+          set -euo pipefail
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --install-deps-from=flathub --force-clean \
+            --disable-rofiles-fuse --arch=${{ matrix.arch }} \
+            --repo=repo build io.github.rulin132.ClaudeDesktop.yaml
+
+      # Same gate as build.yml. A release must not publish bytes that were never
+      # installed.
+      - name: smoke test
+        run: |
+          set -euo pipefail
+          flatpak remote-add --user --if-not-exists --no-gpg-verify claude-desktop-rel "$PWD/repo"
+          flatpak install --user -y claude-desktop-rel io.github.rulin132.ClaudeDesktop
+          scripts/ci-smoke.sh io.github.rulin132.ClaudeDesktop
+
+      # Tarred, not uploaded as a directory tree. upload-artifact walks files
+      # and so drops empty directories, but an OSTree repo carries five that
+      # are load-bearing (extensions, refs/mirrors, refs/remotes, state,
+      # tmp/cache). Without them `ostree refs` fails with
+      # "opendir(refs/remotes)" on the far side and `ostree init` does not
+      # repair it, so the merge would fail on the first ever run.
+      - name: pack the repo
+        run: tar -cf repo.tar repo
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repo-${{ matrix.arch }}
+          path: repo.tar
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.v }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08@sha256:6f3180c6765cb55e5dcd8ee4127b82aba25163c8c655a161422b7c447c14e4af
+      options: --privileged
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: arch-repos
+
+      - name: read version
+        id: ver
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' build-aux/io.github.rulin132.ClaudeDesktop.metainfo.xml | head -n1)
+          [[ "$ver" =~ ^[0-9][-0-9A-Za-z.+:~]{0,127}$ ]] || {
+            echo "invalid metainfo version" >&2; exit 1; }
+          printf 'v=%s\n' "$ver" >> "$GITHUB_OUTPUT"
+
+      # Before anything is signed, uploaded or pushed. The release, the GHCR
+      # tags and the Pages site all carry the metainfo version, so a tag that
+      # disagrees with it would publish under a version nobody authorised.
+      # Manual dispatch keeps the derived behaviour and skips this.
+      - name: tag must match the manifest version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          set -euo pipefail
+          want="v$RELEASE_VERSION"
+          test "$REF_NAME" = "$want" || {
+            echo "tag does not match metainfo $want"; exit 1; }
+
+      # GPG signing is not optional: flatpak refuses system-wide installs of
+      # extra-data apps from a source that is not gpg-verified.
+      - name: import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME=$PWD/.gnupg
+          mkdir -p -m700 "$GNUPGHOME"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+
+      # Named `repo` because publish-pages.sh copies that path unchanged.
+      - name: merge and sign
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+          for arch in x86_64 aarch64; do
+            tar -xf "arch-repos/repo-$arch/repo.tar" -C "arch-repos/repo-$arch"
+          done
+          ./scripts/merge-repos.sh repo \
+            arch-repos/repo-x86_64/repo arch-repos/repo-aarch64/repo
+          # Creates the appstream refs, so it runs before the signing pass.
+          # No deltas yet: a static delta embeds the commit it was generated
+          # from, so one built before signing hands the client a commit with no
+          # detached metadata, and the install fails "no signatures found" even
+          # though the standalone commit object is signed.
+          flatpak build-update-repo --gpg-sign="$GPG_KEY_ID" repo/
+          # build-update-repo signs the summary, not the commits, and
+          # merge-repos.sh copies commits verbatim through `ostree pull-local`,
+          # which preserves their absent signatures. Without this the remote
+          # advertises a GPGKey, every client turns commit verification on, and
+          # the install dies with "no signatures found" after the summary has
+          # already verified fine. Signing a signed commit errors, so skip the
+          # ones build-update-repo made itself.
+          ./scripts/sign-repo.sh repo "$GPG_KEY_ID"
+          # Deltas last, so they carry signed commits, and the summary that
+          # advertises them is regenerated in the same pass.
+          flatpak build-update-repo --gpg-sign="$GPG_KEY_ID" \
+            --generate-static-deltas --prune repo/
+          ./scripts/sign-repo.sh repo "$GPG_KEY_ID"
+          echo "published refs:"; ostree --repo=repo refs | grep '^app/'
+
+      # No sideload bundle: build-bundle cannot carry an extra-data source
+      # (flatpak#1334), so the .flatpak it produces has no application in it.
+
+      - name: assemble Pages site
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+          PAGES_URL: https://rulin132.github.io/claude-desktop-flatpak
+          BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: ./scripts/publish-pages.sh
+
+      # The public key has already been exported into the Pages metadata. Drop
+      # the private key before any later third-party action executes.
+      - name: remove signing key
+        if: always()
+        run: |
+          if [ -n "${GNUPGHOME:-}" ]; then
+            rm -rf -- "$GNUPGHOME"
+          fi
+      # upload-pages-artifact internally calls upload-artifact@v4 (unpinned tag),
+      # which a pinned-only Actions policy rejects. Inline its steps instead:
+      # create the tar archive manually and upload it via the already-allowed
+      # upload-artifact action.
+      - name: archive Pages artifact
+        run: |
+          tar \
+            --dereference --hard-dereference \
+            --directory public \
+            -cf "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            .
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+
+      # Built here because only this container has flatpak, but pushed from a
+      # separate job. This image ships no registry client at all, no skopeo,
+      # oras, crane, podman or docker, and no package manager to add one.
+      - name: build the OCI image
+        run: |
+          set -euo pipefail
+          flatpak build-bundle --oci --oci-layer-compress=zstd \
+            repo oci-image io.github.rulin132.ClaudeDesktop
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: oci-image
+          path: oci-image
+          retention-days: 1
+
+      # Cut before the GHCR push, not after. The release is the cheaper thing to
+      # get right and OCI is the optional channel; a failed push must not take
+      # the release down with it.
+      #
+      # No files: attached, per the bundle note above. The release is a marker
+      # pointing at the repo remote.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: v${{ steps.ver.outputs.v }}
+          body: |
+            Packaging build for upstream Claude Desktop ${{ steps.ver.outputs.v }}.
+
+            Install:
+                flatpak remote-add --user claude-desktop https://rulin132.github.io/claude-desktop-flatpak/claude-desktop.flatpakrepo
+                flatpak install --user claude-desktop io.github.rulin132.ClaudeDesktop
+
+            Unofficial community packaging. Not affiliated with Anthropic.
+            Anthropic's own Linux build (Ubuntu/Debian) is at
+            https://code.claude.com/docs/en/desktop-linux
+
+  # Plain ubuntu-latest, not the flatpak container, because that container has no
+  # registry client and no package manager to install one. Runs after publish, so
+  # a failure here costs only the OCI channel: Pages and the release are done.
+  ghcr:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: oci-image
+          path: oci-image
+
+      - name: push to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          RELEASE_VERSION: ${{ needs.publish.outputs.version }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          echo "$GHCR_TOKEN" | skopeo login ghcr.io \
+            -u "$GHCR_USER" --password-stdin
+          for tag in "$RELEASE_VERSION" latest; do
+            skopeo copy --format oci oci:oci-image \
+              "docker://ghcr.io/$REPOSITORY_OWNER/claude-desktop-flatpak:$tag"
+          done
+          echo "a newly created GHCR package is private; make it public in the"
+          echo "package settings or anonymous pulls get 401"
+
+  deploy-pages:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+  # The only job that tests what a user actually does. Every other install in
+  # this pipeline reads a local repo directory with --no-gpg-verify, so a remote
+  # with a signed summary and unsigned commits would go out green: the smoke
+  # test disables the exact check that would be broken. This one installs over
+  # HTTPS from the published URL with verification left on, so a signing
+  # regression fails the release instead of reaching users.
+  #
+  # Last, and allowed to fail loudly, because by this point the bytes are
+  # already public. It reports rather than prevents.
+  verify-published-remote:
+    needs: [publish, deploy-pages]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # ci-smoke.sh reads build-aux/*.metainfo.xml to check the installed
+      # payload against the version this release claims, so it needs the tree.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing version $VERSION"
-
-      - name: Install validators
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y appstream desktop-file-utils
-
-      # --no-net for the same reason as validate.yml: upstream URLs return 403
-      # to CI runners and would fail an otherwise valid release.
-      - name: Validate metadata
-        run: |
-          appstreamcli validate --no-net --explain com.anthropic.Claude.metainfo.xml
-          desktop-file-validate com.anthropic.Claude.desktop
-
-      - name: Check version consistency
-        run: ./scripts/check-version.sh "${{ steps.version.outputs.version }}"
-
-      - name: Extract release notes
-        run: |
-          ./scripts/extract-release-notes.sh "${{ steps.version.outputs.version }}" > release-notes.md
-          cat >> release-notes.md <<'EOF'
-
-          ---
-
-          ## Install
-
-          Download the bundle below and install it:
-
-          ```bash
-          flatpak install --user claude-desktop.flatpak
-          flatpak run com.anthropic.Claude
-          ```
-
-          This is a community package and is not affiliated with or endorsed by
-          Anthropic. Anthropic ships an official Claude Desktop for Linux; see
-          https://code.claude.com/docs/en/desktop-linux.
-          EOF
-          cat release-notes.md
-
-      - name: Create draft release
+      - name: install from the published remote
         env:
-          GH_TOKEN: ${{ github.token }}
+          REPO_URL: https://rulin132.github.io/claude-desktop-flatpak/claude-desktop.flatpakrepo
+          STAMP_URL: https://rulin132.github.io/claude-desktop-flatpak/build-id
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Release v$VERSION already exists, updating notes."
-            gh release edit "v$VERSION" --notes-file release-notes.md
-          else
-            gh release create "v$VERSION" \
-              --draft \
-              --title "v$VERSION" \
-              --notes-file release-notes.md
-          fi
-          echo "Draft release ready. Attach the built .flatpak bundle, then publish:"
-          echo "  gh release upload v$VERSION claude-desktop.flatpak"
-          echo "  gh release edit v$VERSION --draft=false"
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y flatpak
+
+          # Wait for THIS run's deploy, not merely for a 200. Polling for
+          # reachability passes instantly against the previous deploy, which is
+          # how a green verify job can report on bytes it never fetched.
+          want="${{ github.run_id }}-${{ github.run_attempt }}"
+          for _ in $(seq 1 40); do
+            got=$(curl -fsS "$STAMP_URL" 2>/dev/null || true)
+            [ "$got" = "$want" ] && break
+            sleep 15
+          done
+          [ "${got:-}" = "$want" ] || {
+            echo "Pages still serving '$got', expected '$want' after 10 minutes"
+            exit 1
+          }
+
+          flatpak remote-add --user --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          flatpak remote-add --user claude-desktop "$REPO_URL"
+          # No --no-gpg-verify. That omission is the whole point of this job.
+          flatpak install --user -y claude-desktop io.github.rulin132.ClaudeDesktop
+          scripts/ci-smoke.sh io.github.rulin132.ClaudeDesktop
+          echo "verified: installs from the published remote with GPG on"

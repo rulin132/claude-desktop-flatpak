@@ -1,0 +1,122 @@
+app-id: io.github.rulin132.ClaudeDesktop
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '25.08'
+command: claude-desktop-launcher
+separate-locales: false
+tags:
+  - proprietary
+
+# ---------------------------------------------------------------------------
+# SEALED SANDBOX (default posture, see docs/SECURITY.md)
+#
+# Deliberately absent:
+#   --filesystem=host                     the app sees NO user files by default
+#   --talk-name=org.freedesktop.Flatpak   no flatpak-spawn --host = no host escape
+#
+# Grant a workspace explicitly, per-user, per-directory:
+#   flatpak override --user --filesystem=~/code io.github.rulin132.ClaudeDesktop
+# ---------------------------------------------------------------------------
+finish-args:
+  # zypak's spawn strategy needs expose-pids/SpawnStarted (flatpak >= 1.8.2).
+  - --require-version=1.8.2
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  # Credential storage via Secret Service / KWallet (the .deb depends on
+  # libsecret-1-0 and recommends gnome-keyring | kwalletd).
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd5
+  - --talk-name=org.kde.kwalletd6
+  # Tray icon: upstream ships TrayIconLinux*.png. StatusNotifierItem only;
+  # GNOME additionally needs a shell extension.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Chromium owns this exact name for its tray item (sandbox pid is always 2).
+  # Without it the proxy denies RequestName and the icon silently never shows.
+  - --own-name=org.freedesktop.StatusNotifierItem-2-1
+  # Notifications go through the portal, no talk-name needed since BaseApp 23.08.
+  #
+  # The Code tab is Claude Code, which writes ~/.claude/ and ~/.claude.json
+  # straight into $HOME and ignores the XDG dirs. Sandbox $HOME is a throwaway
+  # tmpfs, so without this every launch starts from nothing. --persist takes
+  # directories only, and a top-level dotfile can be kept only by persisting
+  # the whole home. This does NOT widen the sandbox: it binds the sandbox home
+  # to ~/.var/app/<id>/, the app's own data dir. No host path becomes visible.
+  # Same pattern as com.valvesoftware.Steam on Flathub.
+  - --persist=.
+  - --env=ELECTRON_TRASH=gio
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+
+modules:
+  - name: claude-desktop
+    buildsystem: simple
+    build-commands:
+      # Install-time unpacker and launcher.
+      - install -Dm755 apply_extra /app/bin/apply_extra
+      - install -Dm755 launcher.sh /app/bin/claude-desktop-launcher
+      # AppStream/desktop metadata MUST be installed at build time: the store
+      # index has to exist before any extra-data is downloaded.
+      - install -Dm644 io.github.rulin132.ClaudeDesktop.desktop
+        /app/share/applications/io.github.rulin132.ClaudeDesktop.desktop
+      - install -Dm644 io.github.rulin132.ClaudeDesktop.metainfo.xml
+        /app/share/metainfo/io.github.rulin132.ClaudeDesktop.metainfo.xml
+      # Upstream ships hicolor 16/32/48/128/256; 64 is downscaled by
+      # scripts/extract-icons.sh. No 512: upscaling 256 looks worse than
+      # letting the shell scale it.
+      - for s in 16 32 48 64 128 256; do install -Dm644 "icons/$s.png"
+        "/app/share/icons/hicolor/${s}x${s}/apps/io.github.rulin132.ClaudeDesktop.png"; done
+    sources:
+      - type: dir
+        path: build-aux
+
+      - type: file
+        path: LICENSE
+
+      # -- Vendor payload -----------------------------------------------------
+      # extra-data is downloaded on the USER'S machine at install time. We never
+      # host or redistribute Anthropic's bytes. sha256 + size are MANDATORY and
+      # are verified before apply_extra runs.
+      #
+      # Versioned pool/ URLs: the bytes behind a pin cannot change. When
+      # upstream drops an old version from pool/, installs 404 until the
+      # nightly re-pin (update-check.yml -> scripts/refresh-source.sh) lands.
+      #
+      # `make hashes` re-pins both blocks from the Packages index.
+      - type: extra-data
+        filename: claude-desktop.deb
+        only-arches:
+          - x86_64
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.31226.1_amd64.deb
+        sha256: 5a9bebdfcb1df6ce38767b373f3a7fabf77156a2ddd8a3f5d04961da5bde305e
+        size: 181377680
+        x-checker-data:
+          type: debian-repo
+          package-name: claude-desktop
+          root: https://downloads.claude.ai/claude-desktop/apt/stable
+          dist: stable
+          component: main
+          is-main-source: true
+
+      - type: extra-data
+        filename: claude-desktop.deb
+        only-arches:
+          - aarch64
+        url: https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_2.31226.1_arm64.deb
+        sha256: d2f57a38ffc73cfda660f8772a5f8bada05e6d74399948a268c6f5d53593ee8f
+        size: 174060344
+        x-checker-data:
+          type: debian-repo
+          package-name: claude-desktop
+          root: https://downloads.claude.ai/claude-desktop/apt/stable
+          dist: stable
+          component: main

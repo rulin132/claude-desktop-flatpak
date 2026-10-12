@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Claude
+GenericName=AI Assistant
+Comment=Claude chat and Claude Code desktop app
+Exec=claude-desktop-launcher %U
+Icon=io.github.rulin132.ClaudeDesktop
+Terminal=false
+StartupNotify=true
+StartupWMClass=Claude
+Categories=Network;Development;Utility;
+Keywords=claude;anthropic;ai;assistant;claude code;
+MimeType=x-scheme-handler/claude;

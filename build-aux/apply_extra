@@ -1,0 +1,100 @@
+#!/bin/sh
+# apply_extra: runs on the USER'S machine at install time, not at build time.
+#
+# Environment (see flatpak common/flatpak-dir.c, apply_extra_data()):
+#   * cwd is /app/extra, which is the only writable path
+#   * /app and the runtime /usr are bind-mounted read-only
+#   * NO network, NO D-Bus, NO /proc, all capabilities dropped
+#   * a non-zero exit aborts the install ("apply extra script failed")
+#
+# Fail closed. A broken assumption here must break the install loudly, never
+# produce a half-unpacked app.
+set -eu
+
+DEB=claude-desktop.deb
+die() { echo "apply_extra: $*" >&2; exit 1; }
+
+[ -f "$DEB" ] || die "$DEB not found in /app/extra"
+
+# --- 1. unpack the .deb ------------------------------------------------------
+command -v bsdtar >/dev/null 2>&1 || die "bsdtar missing from the runtime"
+bsdtar -Oxf "$DEB" 'control.tar*' | bsdtar -xf - ./control 2>/dev/null || true
+bsdtar -Oxf "$DEB" 'data.tar*'    | bsdtar -xf - || die "failed to extract data.tar"
+
+# --- 2. record the upstream version -----------------------------------------
+# Useful for `flatpak run --command=cat ... /app/extra/VERSION` and bug reports.
+if [ -f control ]; then
+    sed -n 's/^Version:[[:space:]]*//p' control > VERSION || true
+fi
+[ -s VERSION ] || echo "unknown" > VERSION
+
+rm -f "$DEB" control
+
+# --- 3. locate the payload without hardcoding upstream's layout --------------
+# 2.31226.1 ships under /usr/lib/claude-desktop. Found by walking back from
+# app.asar rather than assumed, so a move to /opt fails here with a message
+# instead of in the launcher with a missing binary.
+ASAR=$(find . -type f -name 'app.asar' -print 2>/dev/null | head -n1 || true)
+[ -n "$ASAR" ] || die "no app.asar found, upstream .deb layout changed, review scripts/inspect-deb.sh output"
+
+RESOURCES=$(dirname "$ASAR")
+APPDIR=$(dirname "$RESOURCES")
+[ "$(basename "$RESOURCES")" = "resources" ] || die "unexpected layout: app.asar not in a resources/ dir ($ASAR)"
+
+# The main binary: an ELF executable in APPDIR that is not a helper. In
+# 2.31226.1 that is `claude-desktop`, sitting next to chrome_crashpad_handler
+# and the shipped chrome-sandbox, both skipped by the pattern.
+APP_BIN=""
+for f in "$APPDIR"/*; do
+    [ -f "$f" ] || continue
+    [ -x "$f" ] || continue
+    case "$(basename "$f")" in
+        *.so|*.so.*|*sandbox*|*crashpad*|*.pak|*.bin|*.dat|*.json|*.html) continue ;;
+    esac
+    head -c4 "$f" 2>/dev/null | grep -q 'ELF' || continue
+    APP_BIN="$f"
+    break
+done
+[ -n "$APP_BIN" ] || die "no main ELF binary found in $APPDIR"
+
+# --- 4. move payload to a stable path ---------------------------------------
+BIN_NAME=$(basename "$APP_BIN")
+mv "$APPDIR" ./app.tmp
+rm -rf ./usr ./opt ./etc ./lib ./var ./app
+mv ./app.tmp ./app
+printf 'APP_BIN=/app/extra/app/%s\n' "$BIN_NAME" > app.env
+
+# --- 5. the Chromium sandbox helper -----------------------------------------
+# Upstream ships chrome-sandbox, the SUID helper, and its postinst writes an
+# AppArmor profile so Chromium can use user namespaces instead. Neither works
+# here: OSTree strips setuid and Flatpak forbids nested user namespaces. The
+# Electron BaseApp's zypak takes over before Chromium looks for a helper and
+# runs each renderer in a nested flatpak sub-sandbox, so the file is dead
+# weight. Removed so no code path can ever exec an unprivileged copy of it,
+# which is Chromium's "helper found but not configured correctly" fatal exit.
+# zypak itself is load-bearing: without it nothing is isolated.
+[ -x /app/bin/zypak-wrapper ] \
+    || die "zypak-wrapper missing from the Electron BaseApp, refusing to install an app whose renderers would be unsandboxed"
+rm -f app/chrome-sandbox app/chrome_sandbox
+
+# --- 6. fix the Wayland window icon / .desktop association ------------------
+# Electron reports "{productName}.desktop"; ours is
+# io.github.rulin132.ClaudeDesktop. Cosmetic, so warn rather than abort if the
+# asar format changes.
+if command -v patch-electron-desktop-filename >/dev/null 2>&1; then
+    patch-electron-desktop-filename \
+        --desktop-filename io.github.rulin132.ClaudeDesktop \
+        --skip-integrity-check app/resources/app.asar \
+        || echo "apply_extra: WARNING desktop-filename patch failed (window icon may be wrong)" >&2
+fi
+
+# --- 7. what is deliberately left alone --------------------------------------
+# resources/gnome-search-provider/: its D-Bus name is com.anthropic.Claude.*,
+#   which this app id cannot own, so registering it would never activate.
+# resources/cowork-linux-helper: Cowork drives a qemu VM (the .deb Recommends
+#   qemu-system-x86, ovmf, virtiofsd). None of that is in the runtime and
+#   /dev/kvm is not granted, so it stays unsupported; see README.
+# In-app updater: the Linux build does not update itself (upstream delivers
+#   updates through apt), so there is nothing to neuter.
+
+echo "apply_extra: installed claude-desktop $(cat VERSION) (bin=$BIN_NAME)"
