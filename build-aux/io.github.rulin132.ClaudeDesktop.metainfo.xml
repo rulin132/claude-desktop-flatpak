@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.rulin132.ClaudeDesktop</id>
+  <name>Claude</name>
+  <summary>Unofficial Flatpak of Anthropic's Claude desktop app</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+
+  <!-- The packager, not Anthropic: this is community packaging of their
+       app, and a store listing must not read as if they published it. -->
+  <developer id="io.github.rulin132">
+    <name>rulin132 (community packaging)</name>
+  </developer>
+
+  <description>
+    <p>
+      An unofficial Flatpak packaging of Anthropic's official Claude desktop
+      app for Linux, which upstream ships only as a .deb for Ubuntu and Debian.
+      The application binary is downloaded from Anthropic at install time and
+      is not redistributed by this package.
+    </p>
+    <p>
+      This packaging exists for distributions upstream does not serve: Fedora
+      atomic desktops (Silverblue, Bluefin, Bazzite, Aurora, Kinoite), openSUSE
+      Aeon/MicroOS, Arch, NixOS, Alpine and Steam Deck.
+    </p>
+    <p>
+      It ships a sealed sandbox by default: no host filesystem access and no
+      host command execution. Grant directories explicitly with
+      <code>flatpak override</code>. Cowork, which drives a virtual machine,
+      is not available inside the sandbox.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.rulin132.ClaudeDesktop.desktop</launchable>
+  <url type="homepage">https://claude.ai</url>
+  <url type="help">https://support.claude.com</url>
+  <url type="bugtracker">https://github.com/rulin132/claude-desktop-flatpak/issues</url>
+  <url type="vcs-browser">https://github.com/rulin132/claude-desktop-flatpak</url>
+
+  <!-- No <screenshots> yet. Software centres (and any Flathub submission)
+       need at least one; add docs/screenshots/ and reference it here. -->
+
+  <branding>
+    <color type="primary" scheme_preference="light">#faf9f5</color>
+    <color type="primary" scheme_preference="dark">#262624</color>
+  </branding>
+
+  <keywords>
+    <keyword>Claude</keyword>
+    <keyword>Anthropic</keyword>
+    <keyword>AI</keyword>
+    <keyword>assistant</keyword>
+    <keyword>Claude Code</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">intense</content_attribute>
+  </content_rating>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <!-- Rewritten by scripts/sync-version.sh, which scripts/refresh-source.sh
+       calls with the Version: field of the upstream Packages index. The
+       nightly update-check.yml job is what runs it. Newest entry first:
+       scripts/ci-smoke.sh asserts the installed payload matches this one, so
+       an out-of-order list fails CI on every architecture. -->
+  <releases>
+    <release version="2.31226.1" date="2026-10-12"/>
+  </releases>
+</component>
