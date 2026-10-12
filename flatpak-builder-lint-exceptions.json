@@ -1,5 +1,6 @@
 {
   "io.github.rulin132.ClaudeDesktop": {
+    "appid-url-not-reachable": "The linter derives github.com/rulin132/claudedesktop from the app id and gets a 404 because this repository is named claude-desktop-flatpak. Goes away if the repository is renamed to match; an app id cannot contain a hyphen, so it cannot be changed to match the repository instead.",
     "finish-args-own-name-org.freedesktop.StatusNotifierItem-2-1": "Chromium registers its tray item under this exact name (sandbox pid is always 2). Without owning it the DBus proxy rejects the registration and the tray icon never appears. Upstream ships TrayIconLinux*.png, so it does have one."
   }
 }
